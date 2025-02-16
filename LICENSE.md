@@ -1,6 +1,5 @@
 MIT License
 
-Ashmit Cajla
 
 Copyright (c) 2025
 
