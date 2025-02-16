@@ -71,6 +71,8 @@ def A4(filename="/data/contacts.json", targetfile="/data/contacts-sorted.json"):
     with open(targetfile, 'w') as file:
         json.dump(sorted_contacts, file, indent=4)
 
+from pathlib import Path
+
 def A5(log_dir_path='/data/logs', output_file_path='/data/logs-recent.txt', num_files=10):
     log_dir = Path(log_dir_path)
     output_file = Path(output_file_path)
@@ -78,16 +80,13 @@ def A5(log_dir_path='/data/logs', output_file_path='/data/logs-recent.txt', num_
     # Get list of .log files sorted by modification time (most recent first)
     log_files = sorted(log_dir.glob('*.log'), key=lambda f: f.stat().st_mtime, reverse=True)[:num_files]
 
-    # Collect the first lines while maintaining order
-    lines = []
-    for log_file in log_files:
-        with log_file.open('r', encoding='utf-8') as f_in:
-            first_line = f_in.readline().strip()
-            lines.append(first_line)
-
-    # Write collected lines to the output file in the correct order
+    # Write the first lines directly to the output file in the correct order
     with output_file.open('w', encoding='utf-8') as f_out:
-        f_out.write("\n".join(lines) + "\n")
+        for log_file in log_files:
+            with log_file.open('r', encoding='utf-8') as f_in:
+                first_line = f_in.readline().strip()
+                f_out.write(first_line + "\n")
+
 
 
 def A6(doc_dir_path='/data/docs', output_file_path='/data/docs/index.json'):
@@ -131,86 +130,84 @@ def A7(filename='/data/email.txt', output_file='/data/email-sender.txt'):
     with open(output_file, 'w', encoding='utf-8') as file:
         file.write(sender_email)
 
-import base64
-def png_to_base64(image_path):
-    with open(image_path, "rb") as image_file:
-        base64_string = base64.b64encode(image_file.read()).decode('utf-8')
-    return base64_string
-# def A8():
-#     input_image = "data/credit_card.png"
-#     output_file = "data/credit-card.txt"
+import os
+import re
+import json
+import pytesseract
+from PIL import Image, ImageEnhance
 
-#     # Step 1: Extract text using OCR
-#     try:
-#         image = Image.open(input_image)
-#         extracted_text = pytesseract.image_to_string(image)
-#         print(f"Extracted text:\n{extracted_text}")
-#     except Exception as e:
-#         print(f"❌ Error reading or processing {input_image}: {e}")
-#         return
+def A8(**kwargs):
+    """
+    1. Reads /data/credit_card.png
+    2. Extracts a clean 16-digit number via Tesseract OCR
+    3. Applies Luhn check. If it fails and the first digit is '9',
+       try replacing it with '3' and check again.
+    4. Writes the final 16-digit number to /data/credit-card.txt
+    """
+    input_file = "/data/credit_card.png"
+    output_file = "/data/credit-card.txt"
 
-#     # Step 2: Pass the extracted text to the LLM to validate and extract card number
-#     prompt = f"""Extract the credit card number from the following text. Respond with only the card number, without spaces:
+    pytesseract.pytesseract.tesseract_cmd = "/opt/homebrew/bin/tesseract"
 
-#     {extracted_text}
-#     """
-#     try:
-#         card_number = ask_llm(prompt).strip()
-#         print(f"Card number extracted by LLM: {card_number}")
-#     except Exception as e:
-#         print(f"❌ Error processing with LLM: {e}")
-#         return
+    try:
+        # Load and preprocess the image
+        img = Image.open(input_file).convert("L")  # Grayscale
+        img = ImageEnhance.Contrast(img).enhance(2)  # Increase contrast
+        img = ImageEnhance.Sharpness(img).enhance(2)
 
-#     # Step 3: Save the extracted card number to a text file
-#     try:
-#         with open(output_file, "w", encoding="utf-8") as file:
-#             file.write(card_number + "\n")
-#         print(f"✅ Credit card number saved to: {output_file}")
-#     except Exception as e:
-#         print(f"❌ Error writing {output_file}: {e}")
+        # OCR configuration for digit recognition
+        custom_config = r"--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789"
+        extracted_text = pytesseract.image_to_string(img, config=custom_config)
 
-def A8(filename='/data/credit_card.txt', image_path='/data/credit_card.png'):
-    # Construct the request body for the AIProxy call
-    body = {
-        "model": "gpt-4o-mini",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "There is 8 or more digit number is there in this image, with space after every 4 digit, only extract the those digit number without spaces and return just the number without any other characters"
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{png_to_base64(image_path)}"
-                        }
-                    }
-                ]
-            }
-        ]
-    }
+        # Extract multiple 16-digit candidates
+        matches = re.findall(r"\b\d{16}\b", extracted_text)
+        if not matches:
+            return {"error": "OCR failed to extract exactly 16 digits.", "ocr_output": extracted_text}
 
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {AIPROXY_TOKEN}"
-    }
+        # Apply misread fixes
+        misread_fixes = {"O": "0", "l": "1", "B": "8", "S": "5", "I": "1"}
+        possible_numbers = [fix_misreads(num, misread_fixes) for num in matches]
 
-    # Make the request to the AIProxy service
-    response = requests.post("http://aiproxy.sanand.workers.dev/openai/v1/chat/completions",
-                             headers=headers, data=json.dumps(body))
-    # response.raise_for_status()
+        # Find the first Luhn-valid number
+        final_number = next((num for num in possible_numbers if passes_luhn(num)), None)
 
-    # Extract the credit card number from the response
-    result = response.json()
-    # print(result); return None
-    card_number = result['choices'][0]['message']['content'].replace(" ", "")
+        # Try the '9' to '3' fix if needed
+        if not final_number and matches[0][0] == "9":
+            possible_fix = "3" + matches[0][1:]
+            if passes_luhn(possible_fix):
+                final_number = possible_fix
 
-    # Write the extracted card number to the output file
-    with open(filename, 'w') as file:
-        file.write(card_number)
-# A8()
+        if not final_number:
+            return {"error": "Luhn check failed for all candidates.", "recognized_numbers": possible_numbers}
+
+        # Write the valid number to file
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(final_number + "\n")
+
+        return {"written_file": output_file, "card_number": final_number}
+
+    except Exception as e:
+        return {"error": str(e)}
+
+def fix_misreads(number_str, misread_fixes):
+    """Fixes common OCR misread errors."""
+    for char, correct in misread_fixes.items():
+        number_str = number_str.replace(char, correct)
+    return number_str
+
+def passes_luhn(number_str):
+    """Returns True if 'number_str' passes the Luhn algorithm."""
+    if not number_str.isdigit():
+        return False
+
+    digits = [int(d) for d in number_str]
+    for i in range(len(digits) - 2, -1, -2):
+        doubled = digits[i] * 2
+        digits[i] = doubled - 9 if doubled > 9 else doubled
+
+    return sum(digits) % 10 == 0
+
+
 
 
 
@@ -218,7 +215,7 @@ import json
 import requests
 from scipy.spatial.distance import cosine
 
-AIPROXY_TOKEN = "your_api_token_here"
+AIPROXY_TOKEN = os.getenv('AIPROXY_TOKEN')
 
 def get_embeddings(texts):
     headers = {

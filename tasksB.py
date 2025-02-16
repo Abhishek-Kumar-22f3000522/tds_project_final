@@ -80,15 +80,15 @@ def B9(md_path, output_path):
         file.write(html)
 
 # B10: API Endpoint for CSV Filtering
-# from flask import Flask, request, jsonify
-# app = Flask(__name__)
-# @app.route('/filter_csv', methods=['POST'])
-# def filter_csv():
-#     import pandas as pd
-#     data = request.json
-#     csv_path, filter_column, filter_value = data['csv_path'], data['filter_column'], data['filter_value']
-#     B12(csv_path)
-#     df = pd.read_csv(csv_path)
-#     filtered = df[df[filter_column] == filter_value]
-#     return jsonify(filtered.to_dict(orient='records'))
+from flask import Flask, request, jsonify
+app = Flask(__name__)
+@app.route('/filter_csv', methods=['POST'])
+def filter_csv():
+    import pandas as pd
+    data = request.json
+    csv_path, filter_column, filter_value = data['csv_path'], data['filter_column'], data['filter_value']
+    B12(csv_path)
+    df = pd.read_csv(csv_path)
+    filtered = df[df[filter_column] == filter_value]
+    return jsonify(filtered.to_dict(orient='records'))
 
